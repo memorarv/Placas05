@@ -32,7 +32,14 @@ small{color:#94a3b8}.hidden{display:none}.badge{display:inline-block;border-radi
     <button id="start" class="primary">Iniciar cámara y reconocimiento</button>
     <button id="stop" class="secondary" disabled>Detener</button>
   </div>
+
   
+<section class="panel">
+  <div id="status">Estado: esperando que inicies la cámara.</div>
+  <p id="detail">Consejo: acerca la cámara, evita reflejos y mantén la placa enfocada.</p>
+  <small>El OCR se ejecuta en el navegador. El primer inicio puede tardar en descargar el motor de reconocimiento.</small>
+</section>
+
  
 <section class="panel">
   <h2 style="font-size:1.05rem">Historial de reconocimientos</h2>
@@ -95,15 +102,6 @@ const startBtn = document.querySelector('#start');
 const stopBtn = document.querySelector('#stop');
 let stream = null, worker = null, scanning = false, busy = false;
 let lastCandidate = '', streak = 0, redirected = false;
-
-const HISTORY_KEY = 'placas-scan-history';
-const MAX_HISTORY = 200;
-
-let scanSessionStart = 0;
-
-const historyBody = document.querySelector('#historyBody');
-const historySummary = document.querySelector('#historySummary');
-
 
 const HISTORY_KEY = 'placas-scan-history';
 const MAX_HISTORY = 200;
@@ -251,10 +249,18 @@ async function scanLoop() {
       const id = normalize(r.id);
       return id.length >= 4 && compact.includes(id);
     });
-    saveScanRecord(text, match);
+    
     if (match) {
-      if (lastCandidate === match.id) streak++; else { lastCandidate = match.id; streak = 1; }
-      setStatus('posible coincidencia: ' + match.id + ' (' + streak + '/3)', 'Texto detectado: ' + text.trim().slice(0, 180));
+      if (lastCandidate === match.id) { 
+        streak++;
+      } else { 
+        lastCandidate = match.id; 
+        streak = 1; 
+      }
+      setStatus(
+        'posible coincidencia: ' + match.id + ' (' + streak + '/3)',
+        'Texto detectado: ' + text.trim().slice(0, 180)
+      );
       if (streak >= 1) {
         saveScanRecord(match);
         redirected = true;
