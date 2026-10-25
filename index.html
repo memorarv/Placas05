@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101827">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Identificador de placas01</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,Segoe UI,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#101827;color:#f3f4f6}
+main{max-width:760px;margin:auto;padding:18px}
+h1{font-size:1.45rem;margin:.2rem 0 .4rem}
+p{color:#cbd5e1;line-height:1.45}
+button{border:0;border-radius:12px;padding:13px 16px;font-weight:700;font-size:1rem;cursor:pointer}
+.primary{background:#60a5fa;color:#0b1220}.secondary{background:#334155;color:white}
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+video{width:100%;max-height:55vh;object-fit:contain;background:#020617;border-radius:16px}
+.panel{background:#1e293b;padding:14px;border-radius:16px;margin:14px 0}
+#status{font-weight:600}textarea{width:100%;min-height:180px;background:#0f172a;color:#e2e8f0;border:1px solid #475569;border-radius:10px;padding:10px;font:13px ui-monospace,monospace}
+small{color:#94a3b8}.hidden{display:none}.badge{display:inline-block;border-radius:999px;background:#334155;padding:4px 9px;font-size:.8rem}
+</style>
+</head>
+<body>
+<main>
+  <span class="badge">Prototipo experimental</span>
+  <h1>Identificador de placas04</h1>
+  <p>Apunta a una placa con un identificador único impreso. Cuando el texto registrado se detecte de forma consistente, se abrirá su URL.</p>
+  <video id="video" playsinline muted></video>
+  <canvas id="canvas" class="hidden"></canvas>
+  <div class="controls">
+    <button id="start" class="primary">Iniciar cámara y reconocimiento</button>
+    <button id="stop" class="secondary" disabled>Detener</button>
+  </div>
+  
+  <section class="panel">
+   <div id="status">Estado: esperando que inicies la cámara.</div>
+   <p id="detail">Consejo: acerca la cámara, evita reflejos y mantén la placa enfocada.</p>
+   <small>El OCR se ejecuta en el navegador. El primer inicio puede tardar en descargar el motor de reconocimiento.</small>
+  </section>
+
+  <section class="panel">
+   <h2 style="font-size:1.05rem">Diagnóstico OCR</h2>
+   <p>Intentos realizados: <strong id="ocrAttempts">0</strong></p>
+   <p>Último reconocimiento: <strong id="ocrTime">—</strong></p>
+   <p>Tiempo total: <strong id="ocrTotal">0 s</strong></p>
+   <p>Texto reconocido:</p>
+   <pre id="ocrText" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#0f172a;padding:10px;border-radius:8px;min-height:50px">Esperando reconocimiento…</pre>
+  </section>
+
+  <section class="panel">
+    <h2 style="font-size:1.05rem">Administrar placas (demo local)</h2>
+    <p>Modifica los identificadores y URL del ejemplo. Los cambios se guardan solo en este navegador y dispositivo.</p>
+    <textarea id="mapping" spellcheck="false" aria-label="Mapa de identificadores y direcciones web"></textarea>
+    <div class="controls">
+      <button id="save" class="secondary">Guardar registros</button>
+      <button id="reset" class="secondary">Restablecer ejemplo</button>
+    </div>
+    <small>En la versión real, los registros se administrarían desde un panel web compartido por todos los usuarios.</small>
+  </section>
+  <p><small>Privacidad: este prototipo no sube fotos a un servidor. Requiere HTTPS para acceder a la cámara. No uses aún para procesos críticos.</small></p>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+const sample = [
+  {"id":"identi","url":"https://memorarv.github.io/00_Main/"},
+  {"id":"Arnold","url":"https://memorarv.github.io/01_Arnold/"},
+  {"id":"Aguirre","url":"https://memorarv.github.io/02_Aguirre/"}
+];
+const video = document.querySelector('#video');
+const canvas = document.querySelector('#canvas');
+const ctx = canvas.getContext('2d', {willReadFrequently:true});
+const statusEl = document.querySelector('#status');
+const detailEl = document.querySelector('#detail');
+const mappingEl = document.querySelector('#mapping');
+const startBtn = document.querySelector('#start');
+const stopBtn = document.querySelector('#stop');
+let stream = null, worker = null, scanning = false, busy = false;
+let lastCandidate = '', streak = 0, redirected = false;
+let ocrAttempts = 0;
+let ocrStartTime = 0;
+
+const attemptsEl = document.querySelector('#ocrAttempts');
+const ocrTimeEl = document.querySelector('#ocrTime');
+const ocrTotalEl = document.querySelector('#ocrTotal');
+const ocrTextEl = document.querySelector('#ocrText');
+function normalize(s) {
+  return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+function getRecords() {
+  const records = JSON.parse(mappingEl.value);
+  if (!Array.isArray(records)) throw new Error('El JSON debe ser una lista de registros.');
+  for (const r of records) {
+    if (!r.id || !r.url) throw new Error('Cada registro necesita id y url.');
+    const u = new URL(r.url);
+    if (u.protocol !== 'https:') throw new Error('Por seguridad, las URL deben usar HTTPS.');
+  }
+  return records;
+}
+function setStatus(s, detail='') { statusEl.textContent = 'Estado: ' + s; detailEl.textContent = detail; }
+function loadMapping() {
+  try {
+    const saved = localStorage.getItem('placas-map');
+    mappingEl.value = saved || JSON.stringify(sample, null, 2);
+  } catch { mappingEl.value = JSON.stringify(sample, null, 2); }
+}
+document.querySelector('#save').addEventListener('click', () => {
+  try {
+    getRecords();
+    localStorage.setItem('placas-map', mappingEl.value);
+    setStatus('registros guardados en este dispositivo.');
+  } catch(e) { setStatus('no se pudieron guardar los registros.', e.message); }
+});
+document.querySelector('#reset').addEventListener('click', () => {
+  mappingEl.value = JSON.stringify(sample, null, 2);
+  localStorage.removeItem('placas-map');
+  setStatus('ejemplo restablecido.');
+});
+async function stopScan() {
+  scanning = false;
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null;
+  video.srcObject = null;
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  if (worker) { try { await worker.terminate(); } catch {} worker = null; }
+}
+stopBtn.addEventListener('click', stopScan);
+
+async function scanLoop() {
+  if (!scanning || busy || redirected) return;
+  if (video.readyState < 2 || video.videoWidth === 0) {
+    setTimeout(scanLoop, 500); return;
+  }
+  busy = true;
+  try {
+    const maxWidth = 800;
+    const scale = Math.min(1, maxWidth / video.videoWidth);
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    const startOCR = performance.now();
+
+    const result = await worker.recognize(canvas);
+
+    const elapsed = performance.now() - startOCR;
+    const text = result.data.text || '';
+
+    ocrAttempts++;
+    attemptsEl.textContent = ocrAttempts;
+    ocrTimeEl.textContent = Math.round(elapsed) + ' ms';
+    ocrTotalEl.textContent =
+     ((performance.now() - ocrStartTime) / 1000).toFixed(1) + ' s';
+
+    ocrTextEl.textContent = text.trim() || '(no se reconoció texto)';
+
+    const compact = normalize(text);
+    const records = getRecords();
+    const match = records.find(r => {
+      const id = normalize(r.id);
+      return id.length >= 4 && compact.includes(id);
+    });
+    if (match) {
+      if (lastCandidate === match.id) streak++; else { lastCandidate = match.id; streak = 1; }
+      setStatus('posible coincidencia: ' + match.id + ' (' + streak + '/3)', 'Texto detectado: ' + text.trim().slice(0, 180));
+      if (streak >= 1) {
+        redirected = true;
+        setStatus('placa identificada: ' + match.id, 'Abriendo ' + match.url);
+        // Top-level navigation avoids popup-blocker issues with window.open().
+        window.location.assign(match.url);
+        return;
+      }
+    } else {
+      lastCandidate = ''; streak = 0;
+      setStatus('buscando una placa registrada…', 'Texto detectado: ' + (text.trim().slice(0, 180) || 'todavía no se reconoce texto'));
+    }
+  } catch (e) {
+    setStatus('error durante el reconocimiento.', e.message || String(e));
+  } finally {
+    busy = false;
+/*xxxxxxxxxxxxxxxxxxxxxxxxxxxxx tiempo espera entre reconocimientos  xxxxxxxxxxxxxxxxx>*/
+    if (scanning && !redirected) setTimeout(scanLoop, 200);
+  }
+}
+startBtn.addEventListener('click', async () => {
+  try {
+    startBtn.disabled = true;
+    setStatus('solicitando acceso a la cámara…');
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    });
+    video.srcObject = stream;
+    await video.play();
+    setStatus('inicializando OCR…', 'La primera carga puede tardar unos segundos.');
+    ocrAttempts = 0;
+    ocrStartTime = performance.now();
+    attemptsEl.textContent = '0';
+    ocrTimeEl.textContent = '—';
+    ocrTotalEl.textContent = '0 s';
+    ocrTextEl.textContent = 'Inicializando OCR…';
+    worker = await Tesseract.createWorker('spa', 1, {
+      langPath: 'https://tessdata.projectnaptha.com/4.0.0_fast'
+    });
+    
+    await worker.setParameters({
+     tessedit_pageseg_mode: '6'
+    });
+
+    scanning = true;
+    stopBtn.disabled = false;
+    setStatus('reconocimiento activo. Enfoca una placa.');
+    scanLoop();
+  } catch (e) {
+    await stopScan();
+    setStatus('no se pudo iniciar la cámara o el OCR.', e.message || String(e));
+  }
+});
+loadMapping();
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
