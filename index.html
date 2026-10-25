@@ -33,25 +33,17 @@ small{color:#94a3b8}.hidden{display:none}.badge{display:inline-block;border-radi
     <button id="stop" class="secondary" disabled>Detener</button>
   </div>
   
-  <section class="panel">
-   <div id="status">Estado: esperando que inicies la cámara.</div>
-   <p id="detail">Consejo: acerca la cámara, evita reflejos y mantén la placa enfocada.</p>
-   <small>El OCR se ejecuta en el navegador. El primer inicio puede tardar en descargar el motor de reconocimiento.</small>
-  </section>
+ 
+<section class="panel">
+  <h2 style="font-size:1.05rem">Historial de reconocimientos</h2>
+  <p id="historySummary">Registros guardados: 0</p>
 
-  
-  <section class="panel">
-   <h2 style="font-size:1.05rem">Historial de escaneos</h2>
-   <p id="historySummary">Registros guardados: 0</p>
-
-   <div style="overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse">
       <thead>
         <tr>
-          <th style="text-align:left;padding:8px">Fecha y hora</th>
-          <th style="text-align:left;padding:8px">Tiempo</th>
-          <th style="text-align:left;padding:8px">Texto reconocido</th>
-          <th style="text-align:left;padding:8px">Coincidencia</th>
+          <th style="text-align:left;padding:8px">Tiempo de reconocimiento</th>
+          <th style="text-align:left;padding:8px">Palabra coincidente</th>
         </tr>
       </thead>
       <tbody id="historyBody"></tbody>
@@ -59,11 +51,9 @@ small{color:#94a3b8}.hidden{display:none}.badge{display:inline-block;border-radi
   </div>
 
   <div class="controls">
-    <button id="clearHistory" class="secondary">
-      Borrar historial
-    </button>
+    <button id="clearHistory" class="secondary">Borrar historial</button>
   </div>
-  <small>El historial se guarda en este dispositivo y navegador.</small>
+  <small>El historial se conserva en este dispositivo.</small>
 </section>
 
   
@@ -114,6 +104,15 @@ let scanSessionStart = 0;
 const historyBody = document.querySelector('#historyBody');
 const historySummary = document.querySelector('#historySummary');
 
+
+const HISTORY_KEY = 'placas-scan-history';
+const MAX_HISTORY = 200;
+
+let scanSessionStart = 0;
+
+const historyBody = document.querySelector('#historyBody');
+const historySummary = document.querySelector('#historySummary');
+
 function getScanHistory() {
   try {
     return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
@@ -129,16 +128,10 @@ function renderScanHistory() {
   for (const item of history) {
     const tr = document.createElement('tr');
 
-    const values = [
-      item.date,
-      item.elapsed,
-      item.text,
-      item.match || 'Sin coincidencia'
-    ];
-
-    for (const value of values) {
+    for (const value of [item.elapsed, item.match]) {
       const td = document.createElement('td');
-      td.style.cssText = 'padding:8px;border-top:1px solid #475569;vertical-align:top;overflow-wrap:anywhere';
+      td.style.cssText =
+        'padding:8px;border-top:1px solid #475569;overflow-wrap:anywhere';
       td.textContent = value;
       tr.appendChild(td);
     }
@@ -150,40 +143,25 @@ function renderScanHistory() {
     'Registros guardados: ' + history.length;
 }
 
-function saveScanRecord(text, match) {
-  if (!text.trim()) return;
-
-  const elapsedSeconds = scanSessionStart
-    ? (Date.now() - scanSessionStart) / 1000
-    : 0;
-
+function saveScanRecord(match) {
+  const elapsed = (Date.now() - scanSessionStart) / 1000;
   const history = getScanHistory();
 
   history.unshift({
-    date: new Date().toLocaleString(),
-    elapsed: elapsedSeconds.toFixed(1) + ' s',
-    text: text.trim().slice(0, 300),
-    match: match ? match.id : '',
-    url: match ? match.url : ''
+    elapsed: elapsed.toFixed(2) + ' s',
+    match: match.id
   });
 
-  try {
-    localStorage.setItem(
-      HISTORY_KEY,
-      JSON.stringify(history.slice(0, MAX_HISTORY))
-    );
-    renderScanHistory();
-  } catch (error) {
-    console.error('No se pudo guardar el historial:', error);
-    setStatus(
-      'no se pudo guardar el historial.',
-      'Comprueba el almacenamiento disponible en el navegador.'
-    );
-  }
+  localStorage.setItem(
+    HISTORY_KEY,
+    JSON.stringify(history.slice(0, MAX_HISTORY))
+  );
+
+  renderScanHistory();
 }
 
 document.querySelector('#clearHistory').addEventListener('click', () => {
-  if (confirm('¿Borrar todo el historial de escaneos?')) {
+  if (confirm('¿Borrar todo el historial de reconocimientos?')) {
     localStorage.removeItem(HISTORY_KEY);
     renderScanHistory();
   }
@@ -278,6 +256,7 @@ async function scanLoop() {
       if (lastCandidate === match.id) streak++; else { lastCandidate = match.id; streak = 1; }
       setStatus('posible coincidencia: ' + match.id + ' (' + streak + '/3)', 'Texto detectado: ' + text.trim().slice(0, 180));
       if (streak >= 1) {
+        saveScanRecord(match);
         redirected = true;
         setStatus('placa identificada: ' + match.id, 'Abriendo ' + match.url);
         // Top-level navigation avoids popup-blocker issues with window.open().
